@@ -1,4 +1,3 @@
-
 from ast import Tuple
 import logging
 import inspect
@@ -9,13 +8,13 @@ from typing import Callable, List, Optional, Sequence, Union
 
 
 from langchain import LLMChain,  PromptTemplate
-
 from langchain.schema import BaseOutputParser
 from langchain.llms.base import BaseLanguageModel
 
-from promptwatch import register_prompt_template
-
-
+try:
+    from promptwatch import register_prompt_template
+except ImportError:
+    print('To use promptwatch try: pip install promptwatch')
 
 from .common import *
 from .prompt_template import PromptDecoratorTemplate
@@ -23,23 +22,24 @@ from .output_parsers import *
 from .streaming_context import StreamingContext
 
 
-
 def llm_prompt(
-        prompt_type:PromptTypeSettings=PromptTypes.UNDEFINED, # do not change the order of this first parameter unless you will change also the fist few lines... since we are handling cases when decorator is used with and without arguments too, than this will be the func
-        template_format:str = "f-string-extra",
-        output_parser:Union[str,None, BaseOutputParser]="auto", 
-        stop_tokens:List[str]=None, 
-        template_name:str=None, 
-        template_version:str=None, 
-        capture_stream:bool=None,
-        llm:Optional[BaseLanguageModel]=None,
-        format_instructions_parameter_key:str="FORMAT_INSTRUCTIONS",
-        retry_on_output_parsing_error:bool=True,
-        verbose:bool=None,
-        ):
+        # do not change the order of this first parameter unless you will change also the fist few lines... since we are handling cases when decorator is used with and without arguments too, than this will be the func
+        prompt_type: PromptTypeSettings = PromptTypes.UNDEFINED,
+        template_format: str = "f-string-extra",
+        output_parser: Union[str, None, BaseOutputParser] = "auto",
+        stop_tokens: List[str] = None,
+        template_name: str = None,
+        template_version: str = None,
+        capture_stream: bool = None,
+        llm: Optional[BaseLanguageModel] = None,
+        format_instructions_parameter_key: str = "FORMAT_INSTRUCTIONS",
+        retry_on_output_parsing_error: bool = True,
+        max_retries: int = 4, # _on_output_parsing_error
+        verbose: bool = None,
+):
     """
     Decorator for functions that turns a regular function into a LLM prompt executed with default model and settings.
-    
+
     This can be applied on any function that has a docstring with a prompt template. 
     If the function is async, the prompt will be executed asynchronously (with all the langchain async infrastructure).
 
@@ -51,7 +51,7 @@ def llm_prompt(
         `template_format` (Optional[str]): one of [ `f-string` | `f-string-extra` ] ... f-string-extra is a superset of f-string template formats, enabling for optional sections.
 
         `output_formatting` (Optional[str]): one of [ `auto` | `json` | `str` | `list` ] or `None` or langchain OutputParser object - you can control how will the output be parsed. 
-        
+
             `auto` - default - determine the output type automatically based on output type annotations
 
             `str` or `None` - will return plain string output
@@ -74,32 +74,29 @@ def llm_prompt(
 
         `verbose` - whether to print the response from LLM into console
     """
-    
 
-
-    if  callable(prompt_type):
+    if callable(prompt_type):
         # this is the case when the decorator is called without arguments
         # we initialize params with default values
         func = prompt_type
         prompt_type = None
     else:
         func = None
-    
+
     if verbose is None:
         verbose = GlobalSettings.get_current_settings().verbose
-    
+
     if verbose:
         if prompt_type:
             prompt_type = prompt_type.as_verbose()
         else:
-            prompt_type = PromptTypeSettings(color=LogColors.DARK_GRAY,log_level=100, capture_stream=capture_stream)
-            
-    
-        
+            prompt_type = PromptTypeSettings(
+                color=LogColors.DARK_GRAY, log_level=100, capture_stream=capture_stream)
+
     def decorator(func):
         prompt_str = dedent(func.__doc__)
-        name=func.__name__
-        full_name=f"{func.__module__}.{name}" if func.__module__!="__main__" else name
+        name = func.__name__
+        full_name = f"{func.__module__}.{name}" if func.__module__ != "__main__" else name
         is_async = inspect.iscoroutinefunction(func)
         if prompt_type:
             _capture_stream = prompt_type.capture_stream if capture_stream is None else capture_stream
@@ -108,175 +105,209 @@ def llm_prompt(
         if _capture_stream:
 
             if not is_async:
-                print_log(f"Warning: capture_stream=True is only supported for async functions. Ignoring capture_stream for {full_name}", logging.WARNING, LogColors.YELLOW)
-                _capture_stream=False
+                print_log(
+                    f"Warning: capture_stream=True is only supported for async functions. Ignoring capture_stream for {full_name}", logging.WARNING, LogColors.YELLOW)
+                _capture_stream = False
             else:
                 if not StreamingContext.get_context():
-                    print_log(f"Debug: Not inside StreamingContext. Ignoring capture_stream for {full_name}", logging.DEBUG, LogColors.DARK_GRAY)
-                    _capture_stream=False
-                
-       
+                    print_log(
+                        f"Debug: Not inside StreamingContext. Ignoring capture_stream for {full_name}", logging.DEBUG, LogColors.DARK_GRAY)
+                    _capture_stream = False
 
         def prepare_call_args(*args, **kwargs):
             global_settings = GlobalSettings.get_current_settings()
-           
+
             if not llm:
                 if _capture_stream:
                     if not global_settings.default_streaming_llm:
-                        print_log(f"Warning: capture_stream on {name} is on, but the default LLM {llm} doesn't seem to be supporting streaming.", logging.WARNING, LogColors.YELLOW)
-                        
-                    prompt_llm=global_settings.default_streaming_llm or global_settings.default_llm
+                        print_log(
+                            f"Warning: capture_stream on {name} is on, but the default LLM {llm} doesn't seem to be supporting streaming.", logging.WARNING, LogColors.YELLOW)
+
+                    prompt_llm = global_settings.default_streaming_llm or global_settings.default_llm
                 else:
                     prompt_llm = global_settings.default_llm
             else:
-                prompt_llm=llm
+                prompt_llm = llm
                 if _capture_stream:
-                    if  hasattr(llm,"streaming"):
+                    if hasattr(llm, "streaming"):
                         if not getattr(llm, "streaming"):
-                            print_log(f"Warning: capture_stream on {name} is on, but the provided LLM {llm} doesn't have streaming on! Stream wont be captured", logging.WARNING, LogColors.YELLOW)
+                            print_log(
+                                f"Warning: capture_stream on {name} is on, but the provided LLM {llm} doesn't have streaming on! Stream wont be captured", logging.WARNING, LogColors.YELLOW)
                     else:
-                        print_log(f"Warning: capture_stream on {name} is on, but the provided LLM {llm} doesn't seem to be supporting streaming.", logging.WARNING, LogColors.YELLOW)
-                   
-                
+                        print_log(
+                            f"Warning: capture_stream on {name} is on, but the provided LLM {llm} doesn't seem to be supporting streaming.", logging.WARNING, LogColors.YELLOW)
 
-            input_variables_source=None
-            if len(args)==1 and hasattr(args[0],"__dict__"):
+            input_variables_source = None
+            if len(args) == 1 and hasattr(args[0], "__dict__"):
                 # is a proper object
                 input_variables_source = args[0]
 
-            elif len(args)>1:
-                raise Exception(f"Positional arguments are not supported for prompt functions. Only one positional argument as an object with attributes as a source of inputs is supported. Got: {args}")
-            
+            elif len(args) > 1:
+                raise Exception(
+                    f"Positional arguments are not supported for prompt functions. Only one positional argument as an object with attributes as a source of inputs is supported. Got: {args}")
+
             if _capture_stream:
                 if "callbacks" in kwargs:
-                    kwargs["callbacks"].append(StreamingContext.StreamingContextCallback())
+                    kwargs["callbacks"].append(
+                        StreamingContext.StreamingContextCallback())
                 else:
-                    kwargs["callbacks"] = [StreamingContext.StreamingContextCallback()]
+                    kwargs["callbacks"] = [
+                        StreamingContext.StreamingContextCallback()]
 
             if "memory" in kwargs:
                 memory = kwargs.pop("memory")
             else:
-                memory=None
+                memory = None
 
-            prompt_template = PromptDecoratorTemplate.from_func(func, 
-                                                            template_format=template_format, 
-                                                            output_parser=output_parser, 
-                                                            format_instructions_parameter_key=format_instructions_parameter_key,
-                                                            template_name=template_name,
-                                                            template_version=template_version,
-                                                            prompt_type=prompt_type,
-                                                            )
+            prompt_template = PromptDecoratorTemplate.from_func(func,
+                                                                template_format=template_format,
+                                                                output_parser=output_parser,
+                                                                format_instructions_parameter_key=format_instructions_parameter_key,
+                                                                template_name=template_name,
+                                                                template_version=template_version,
+                                                                prompt_type=prompt_type,
+                                                                )
             if prompt_template.default_values:
                 kwargs = {**prompt_template.default_values, **kwargs}
 
-            llmChain = LLMChain(llm=prompt_llm, prompt=prompt_template,  memory=memory)
-            other_supported_kwargs={"stop","callbacks"}
-            unexpected_inputs = [key for key in kwargs if key not in prompt_template.input_variables and key not in other_supported_kwargs ]
+            llmChain = LLMChain(
+                llm=prompt_llm, prompt=prompt_template,  memory=memory)
+            other_supported_kwargs = {"stop", "callbacks"}
+            unexpected_inputs = [
+                key for key in kwargs if key not in prompt_template.input_variables and key not in other_supported_kwargs]
             if unexpected_inputs:
-                raise TypeError(f"Unexpected inputs for prompt function {full_name}: {unexpected_inputs}. \nValid inputs are: {prompt_template.input_variables}")
-            
-            missing_inputs = [key for key in prompt_template.input_variables if key not in kwargs ]
+                raise TypeError(
+                    f"Unexpected inputs for prompt function {full_name}: {unexpected_inputs}. \nValid inputs are: {prompt_template.input_variables}")
+
+            missing_inputs = [
+                key for key in prompt_template.input_variables if key not in kwargs]
             if format_instructions_parameter_key in missing_inputs:
                 missing_inputs.remove(format_instructions_parameter_key)
-                kwargs[format_instructions_parameter_key]=None #init the format instructions with None... will be filled later
+                # init the format instructions with None... will be filled later
+                kwargs[format_instructions_parameter_key] = None
             if missing_inputs:
                 if input_variables_source:
-                    missing_value={}
+                    missing_value = {}
                     for key in missing_inputs:
-                        value= getattr(input_variables_source, key,missing_value)
+                        value = getattr(input_variables_source,
+                                        key, missing_value)
                         if value is missing_value:
-                            raise TypeError(f"Missing a input for prompt function {full_name}: {key}.")
+                            raise TypeError(
+                                f"Missing a input for prompt function {full_name}: {key}.")
                         else:
                             kwargs[key] = value
 
-
-                        
                 else:
-                    raise TypeError(f"{full_name}: missing 1 required keyword-only argument: {missing_inputs}")
-                
+                    raise TypeError(
+                        f"{full_name}: missing 1 required keyword-only argument: {missing_inputs}")
 
             if stop_tokens:
-                kwargs["stop"]=stop_tokens
+                kwargs["stop"] = stop_tokens
             chain_args = kwargs
             return llmChain, chain_args
-        
-        def get_retry_parse_call_args(prompt_template:PromptDecoratorTemplate, exception:OutputParserExceptionWithOriginal):
-            logging.warning(msg=f"Failed to parse output for {full_name}: {exception}\nRetrying...")
+
+        def get_retry_parse_call_args(prompt_template: PromptDecoratorTemplate, exception: OutputParserExceptionWithOriginal):
+            logging.warning(
+                msg=f"Failed to parse output for {full_name}: {exception}\nRetrying...")
             if format_instructions_parameter_key not in prompt_str:
-                logging.warning(f"Please note that we didn't find a {format_instructions_parameter_key} parameter in the prompt string. If you don't include it in your prompt template, you need to provide your custom formatting instructions.")    
-            retry_parse_template = PromptTemplate.from_template("This is an input {original} but it's not in correct format, please convert it into following format:\n{format_instructions}\n\nIf the input doesn't seem to be relevant to the expected format instructions, return 'N/A'")
-            register_prompt_template("retry_parse_template", retry_parse_template)
-            prompt_llm=llm or GlobalSettings.get_current_settings().default_llm
+                logging.warning(
+                    f"Please note that we didn't find a {format_instructions_parameter_key} parameter in the prompt string. If you don't include it in your prompt template, you need to provide your custom formatting instructions.")
+            retry_parse_template = PromptTemplate.from_template(
+                "This is an input {original} but it's not in correct format, please convert it into following format:\n{format_instructions}\n\nIf the input doesn't seem to be relevant to the expected format instructions, return 'N/A'")
+            prompt_llm = llm or GlobalSettings.get_current_settings().default_llm
             retryChain = LLMChain(llm=prompt_llm, prompt=retry_parse_template)
             format_instructions = prompt_template.output_parser.get_format_instructions()
             if not format_instructions:
-                raise Exception(f"Failed to get format instructions for {full_name} from output parser {prompt_template.output_parser}.")
-            call_kwargs = {"original":exception.original, "format_instructions":format_instructions}
+                raise Exception(
+                    f"Failed to get format instructions for {full_name} from output parser {prompt_template.output_parser}.")
+            call_kwargs = {"original": exception.original,
+                           "format_instructions": format_instructions}
             return retryChain, call_kwargs
-
 
         if not is_async:
 
             @wraps(func)
             def wrapper(*args, **kwargs):
-                
-                print_log(log_object=f"> Entering {name} prompt decorator chain", log_level=prompt_type.log_level if prompt_type else logging.DEBUG,color=LogColors.WHITE_BOLD)
+
+                print_log(log_object=f"> Entering {name} prompt decorator chain",
+                          log_level=prompt_type.log_level if prompt_type else logging.DEBUG, color=LogColors.WHITE_BOLD)
                 llmChain, chain_args = prepare_call_args(*args, **kwargs)
 
                 try:
                     result = llmChain.predict(**chain_args)
                     if verbose or prompt_type:
-                        print_log(log_object=f"\nResult:\n{result}", log_level=prompt_type.log_level if verbose else 100,color=prompt_type.color if prompt_type else LogColors.BLUE)
+                        print_log(log_object=f"\nResult:\n{result}", log_level=prompt_type.log_level if verbose else 100,
+                                  color=prompt_type.color if prompt_type else LogColors.BLUE)
                     if llmChain.prompt.output_parser:
                         result = llmChain.prompt.output_parser.parse(result)
-                        
+
                 except OutputParserException as e:
-                    if retry_on_output_parsing_error and isinstance(e, OutputParserExceptionWithOriginal):
-                        prompt_template = llmChain.prompt 
-                        retryChain, call_kwargs = get_retry_parse_call_args(prompt_template, e)
-                        result = retryChain.predict(**call_kwargs)
-                        parsed = prompt_template.output_parser.parse(result)
-                        print_log(log_object=f"> Finished chain", log_level=prompt_type.log_level if prompt_type else logging.DEBUG,color=LogColors.WHITE_BOLD)
-                        return parsed
-                    else: 
-                        raise e
+                    retries_left = max_retries
+                    error = None
+                    parsed_res = None
+                    while retries_left > 0 and retry_on_output_parsing_error and isinstance(e, OutputParserExceptionWithOriginal):
+                        retryChain, call_kwargs = get_retry_parse_call_args(llmChain.prompt, e)
+                        new_result = retryChain.predict(**call_kwargs)
+                        try:
+                            parsed_res = llmChain.prompt.output_parser.parse(new_result)
+                            break  # Successfully parsed, exit the loop
+                        except OutputParserExceptionWithOriginal as new_e:
+                            retries_left -= 1
+                            error = new_e
+
+                    if parsed_res is not None:
+                        print_log(log_object=f"> Finished chain", log_level=prompt_type.log_level if prompt_type else logging.DEBUG, color=LogColors.WHITE_BOLD)
+                        return parsed_res
+                    else:
+                        # Either raise the exception or return an error value after all retries fail
+                        raise error
 
                 return result
             return wrapper
-        
+
         else:
             @wraps(func)
             async def async_wrapper(*args, **kwargs):
-                
-                
-                print_log(log_object=f"> Entering {name} prompt decorator chain", log_level=prompt_type.log_level if prompt_type else logging.DEBUG,color=LogColors.WHITE_BOLD)
+
+                print_log(log_object=f"> Entering {name} prompt decorator chain",
+                          log_level=prompt_type.log_level if prompt_type else logging.DEBUG, color=LogColors.WHITE_BOLD)
                 llmChain, chain_args = prepare_call_args(*args, **kwargs)
 
                 try:
                     result = await llmChain.apredict(**chain_args)
                     if verbose or prompt_type:
-                        print_log(log_object=f"\nResult:\n{result}", log_level=prompt_type.log_level if not verbose else 100,color=prompt_type.color if prompt_type else LogColors.BLUE)
+                        print_log(log_object=f"\nResult:\n{result}", log_level=prompt_type.log_level if not verbose else 100,
+                                  color=prompt_type.color if prompt_type else LogColors.BLUE)
                     if llmChain.prompt.output_parser:
                         result = llmChain.prompt.output_parser.parse(result)
-                    print_log(log_object=f"> Finished chain", log_level=prompt_type.log_level if prompt_type else logging.DEBUG,color=LogColors.WHITE_BOLD)
-                    
+                    print_log(log_object=f"> Finished chain",
+                              log_level=prompt_type.log_level if prompt_type else logging.DEBUG, color=LogColors.WHITE_BOLD)
+
                 except OutputParserException as e:
-                    if retry_on_output_parsing_error and isinstance(e, OutputParserExceptionWithOriginal):
-                        prompt_template = llmChain.prompt 
-                        retryChain, call_kwargs = get_retry_parse_call_args(prompt_template, e)
-                        result = await retryChain.apredict(**call_kwargs)
-                        parsed = prompt_template.output_parser.parse(result)
-                        print_log(log_object=f"> Finished chain", log_level=prompt_type.log_level if prompt_type else logging.DEBUG,color=LogColors.WHITE_BOLD)
-                        return parsed
-                    else: 
-                        raise e
+                    retries_left = max_retries
+                    error = None
+                    parsed_res = None
+                    while retries_left > 0 and retry_on_output_parsing_error and isinstance(e, OutputParserExceptionWithOriginal):
+                        retryChain, call_kwargs = get_retry_parse_call_args(llmChain.prompt, e)
+                        new_result = await retryChain.apredict(**call_kwargs)
+                        try:
+                            parsed_res = llmChain.prompt.output_parser.parse(new_result)
+                            break  # Successfully parsed, exit the loop
+                        except OutputParserExceptionWithOriginal as new_e:
+                            retries_left -= 1
+                            error = new_e
+
+                    if parsed_res is not None:
+                        print_log(log_object=f"> Finished chain", log_level=prompt_type.log_level if prompt_type else logging.DEBUG, color=LogColors.WHITE_BOLD)
+                        return parsed_res
+                    else:
+                        # Either raise the exception or return an error value after all retries fail
+                        raise error
 
                 return result
             return async_wrapper
-        
+
     if func:
         return decorator(func)
     else:
         return decorator
-
-
